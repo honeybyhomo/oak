@@ -1,0 +1,22 @@
+# Binaries
+bin/
+
+# Environment files with secrets
+.env.dev
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+bin/
+main

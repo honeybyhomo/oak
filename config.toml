@@ -1,0 +1,47 @@
+# Oak Configuration
+# See .env for environment-specific overrides
+
+[app]
+environment = "development"  # Override: OAK__APP__ENVIRONMENT
+port = 8081                  # Override: OAK__APP__PORT
+
+[database]
+host = "localhost"           # Override: OAK__DATABASE__HOST
+port = 5432                  # Override: OAK__DATABASE__PORT
+name = "oak"                 # Override: OAK__DATABASE__NAME
+user = "oak"                 # Override: OAK__DATABASE__USER
+password = "change_me"       # Override: OAK__DATABASE__PASSWORD
+ssl_mode = "disable"         # Options: disable, require, verify-ca, verify-full
+max_open_conns = 10
+max_idle_conns = 5
+
+[logging]
+level = "info"               # Override: OAK__LOGGING__LEVEL (debug|info|warn|error)
+format = "text"
+retention_days = 10
+
+[scheduler]
+timezone = "Europe/Copenhagen"  # Override: OAK__SCHEDULER__TIMEZONE
+
+[services.wolf]
+api_base_url = "https://app.wolf-waagen.de"  # Override: OAK__SERVICES__WOLF__API_BASE_URL
+
+[jobs.global]
+max_attempts = 3
+timeout_minutes = 10
+batch_insert_size = 100
+
+# Wolf Daily — fetch and store yesterday's measurements
+# Runs at 02:00 Copenhagen time
+[jobs.wolf_daily]
+schedules = ["0 2 * * *"]
+
+# Wolf Notify — send daily digest to Mattermost
+# Runs at 08:00 Copenhagen time (after daily fetch)
+[jobs.wolf_notify]
+schedules = ["0 8 * * *"]
+
+# Mattermost notification settings
+[jobs.mattermost]
+webhook_url = "change_me"    # Override: OAK__JOBS__MATTERMOST__WEBHOOK_URL
+username = "Vægt"

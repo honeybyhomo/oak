@@ -1,0 +1,53 @@
+# Oak — Personal automation platform
+#
+# Dockhand setup:
+#   Compose path: compose.yaml
+#   Build on deploy: Yes
+#   Secrets (Dockhand → environment:):
+#     OAK__DATABASE__PASSWORD
+#     OAK__JOBS__MATTERMOST__WEBHOOK_URL
+#
+# Prerequisites:
+#   - External network 'traefik' (reverse proxy)
+#   - External network 'postgres-apps' (shared PostgreSQL)
+#   - Database 'oak' created on postgres-apps (use create-db.sh)
+
+services:
+  oak:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oak:latest
+    container_name: oak
+    env_file:
+      - .env
+    environment:
+      - OAK__DATABASE__PASSWORD=${DB_PASSWORD}
+      - OAK__JOBS__MATTERMOST__WEBHOOK_URL=${MATTERMOST_WEBHOOK_URL}
+    networks:
+      - traefik
+      - postgres-apps
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.oak.rule=Host(`oak.${DOMAIN}`)"
+      - "traefik.http.routers.oak.entrypoints=websecure"
+      - "traefik.http.routers.oak.tls=true"
+      - "traefik.http.routers.oak.tls.certresolver=letencrypt"
+      - "traefik.http.services.oak.loadbalancer.server.port=8081"
+    # ports:
+    #   - 8081:8081
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  traefik:
+    name: traefik
+    external: true
+  postgres-apps:
+    name: postgres-apps
+    external: true
