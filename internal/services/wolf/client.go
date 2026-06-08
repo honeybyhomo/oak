@@ -57,50 +57,51 @@ type APIResponse struct {
 
 // Series represents a single data series in the API response
 type Series struct {
-	ID     string       `json:"id"`
-	Unit   string       `json:"unit"`
-	Values []FloatValue `json:"values,omitempty"`
+	ID     string          `json:"id"`
+	Unit   string          `json:"unit"`
+	Values json.RawMessage `json:"values"`
 }
 
-// FloatValue handles JSON values that can be either numbers or strings
-// The Wolf API returns temperature_glt as strings like "1032.0"
-type FloatValue float64
-
-func (f *FloatValue) UnmarshalJSON(data []byte) error {
-	// Try number first
-	var num float64
-	if err := json.Unmarshal(data, &num); err == nil {
-		*f = FloatValue(num)
+// FloatValues parses the series values as a slice of floats.
+// Handles: numbers, strings, nulls, and null array elements.
+// Returns nil if values is not an array.
+func (s *Series) FloatValues() []float64 {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(s.Values, &raw); err != nil {
 		return nil
 	}
-	// Try string
+	result := make([]float64, len(raw))
+	for i, r := range raw {
+		result[i] = parseFloatRaw(r)
+	}
+	return result
+}
+
+// parseFloatRaw parses a single JSON value (number, string, or null) into a float64.
+// Returns NaN for null, empty string, or unparseable values.
+func parseFloatRaw(data []byte) float64 {
+	// null
+	if string(data) == "null" {
+		return math.NaN()
+	}
+	// number
+	var num float64
+	if err := json.Unmarshal(data, &num); err == nil {
+		return num
+	}
+	// string
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
 		if s == "" {
-			*f = FloatValue(math.NaN())
-			return nil
+			return math.NaN()
 		}
 		parsed, err := strconv.ParseFloat(s, 64)
 		if err != nil {
-			*f = FloatValue(math.NaN())
-			return nil
+			return math.NaN()
 		}
-		*f = FloatValue(parsed)
-		return nil
+		return parsed
 	}
-	// null
-	*f = FloatValue(math.NaN())
-	return nil
-}
-
-// Float returns the float64 value, or NaN if not valid
-func (f FloatValue) Float() float64 {
-	return float64(f)
-}
-
-// IsValid returns true if the value is a real number (not NaN)
-func (f FloatValue) IsValid() bool {
-	return !math.IsNaN(float64(f))
+	return math.NaN()
 }
 
 // Summary contains pre-aggregated statistics

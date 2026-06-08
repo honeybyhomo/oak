@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/honeybyhomo/oak/internal/job"
@@ -89,6 +90,9 @@ func (t *DailyMeasurementsTask) fetchAndStore(ctx context.Context, scaleID strin
 		return 0, fmt.Errorf("weight series not found in API response")
 	}
 
+	weights := weightSeries.FloatValues()
+	yields := yieldSeries.FloatValues()
+
 	// Use summary data for temperature (pre-aggregated)
 	var tempMin, tempMax, tempAvg sql.NullFloat64
 	tempSummary := wolf.FindSummary(resp, "temperature")
@@ -108,7 +112,7 @@ func (t *DailyMeasurementsTask) fetchAndStore(ctx context.Context, scaleID strin
 	dbStart := time.Now()
 	inserted := 0
 
-	for i := 0; i < len(weightSeries.Values); i++ {
+	for i := 0; i < len(weights); i++ {
 		date := pointStart.AddDate(0, 0, i)
 
 		// Skip dates outside our requested range
@@ -116,14 +120,14 @@ func (t *DailyMeasurementsTask) fetchAndStore(ctx context.Context, scaleID strin
 			continue
 		}
 
-		weight := weightSeries.Values[i].Float()
-		if !weightSeries.Values[i].IsValid() {
+		weight := weights[i]
+		if math.IsNaN(weight) {
 			continue
 		}
 
 		var yieldVal sql.NullFloat64
-		if yieldSeries != nil && i < len(yieldSeries.Values) && yieldSeries.Values[i].IsValid() {
-			yieldVal = sql.NullFloat64{Float64: yieldSeries.Values[i].Float(), Valid: true}
+		if yieldSeries != nil && i < len(yields) && !math.IsNaN(yields[i]) {
+			yieldVal = sql.NullFloat64{Float64: yields[i], Valid: true}
 		}
 
 		_, err := t.db.ExecContext(ctx, `
