@@ -28,7 +28,7 @@ api_base_url = "https://app.wolf-waagen.de"  # Override: OAK__SERVICES__WOLF__AP
 
 [jobs.global]
 max_attempts = 3
-timeout_minutes = 10
+timeout_minutes = 30
 batch_insert_size = 100
 
 # Wolf Daily — fetch and store yesterday's measurements

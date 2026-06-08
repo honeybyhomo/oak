@@ -13,23 +13,24 @@ import (
 	"github.com/honeybyhomo/oak/internal/services/wolf"
 )
 
-// BackfillTask fetches and stores historical measurements for a date range
+// BackfillTask fetches and stores historical measurements.
+// It fetches year-by-year from startYear to today to keep API requests manageable.
 type BackfillTask struct {
-	client *wolf.Client
-	db     *sql.DB
-	scales []string
-	days   int // number of days to backfill
-	logger *logger.Logger
+	client    *wolf.Client
+	db        *sql.DB
+	scales    []string
+	startYear int // year to start backfilling from
+	logger    *logger.Logger
 }
 
 // NewBackfillTask creates a new backfill task
-func NewBackfillTask(client *wolf.Client, db *sql.DB, scales []string, days int, log *logger.Logger) *BackfillTask {
+func NewBackfillTask(client *wolf.Client, db *sql.DB, scales []string, startYear int, log *logger.Logger) *BackfillTask {
 	return &BackfillTask{
-		client: client,
-		db:     db,
-		scales: scales,
-		days:   days,
-		logger: log,
+		client:    client,
+		db:        db,
+		scales:    scales,
+		startYear: startYear,
+		logger:    log,
 	}
 }
 
@@ -47,20 +48,29 @@ func (t *BackfillTask) Run(ctx context.Context) (*job.Result, error) {
 	}
 
 	now := time.Now().In(loc)
-	endDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	startDate := endDate.AddDate(0, 0, -t.days)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 
 	t.logger.Info("Starting backfill",
-		"from", startDate.Format("2006-01-02"),
-		"to", endDate.Format("2006-01-02"),
-		"days", t.days)
+		"from_year", t.startYear,
+		"to", today.Format("2006-01-02"))
 
-	for _, scaleID := range t.scales {
-		records, err := t.backfillScale(ctx, scaleID, startDate, endDate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to backfill scale %s: %w", scaleID, err)
+	// Fetch year by year to keep API requests manageable
+	for year := t.startYear; year <= now.Year(); year++ {
+		yearStart := time.Date(year, 1, 1, 0, 0, 0, 0, loc)
+		yearEnd := time.Date(year, 12, 31, 0, 0, 0, 0, loc)
+
+		// Don't fetch beyond today
+		if yearEnd.After(today) {
+			yearEnd = today
 		}
-		totalRecords += records
+
+		for _, scaleID := range t.scales {
+			records, err := t.backfillScale(ctx, scaleID, yearStart, yearEnd)
+			if err != nil {
+				return nil, fmt.Errorf("failed to backfill year %d scale %s: %w", year, scaleID, err)
+			}
+			totalRecords += records
+		}
 	}
 
 	return &job.Result{
@@ -87,7 +97,7 @@ func (t *BackfillTask) backfillScale(ctx context.Context, scaleID string, startD
 	tempRangeSeries := wolf.FindSeries(resp, "temperature_range")
 
 	if weightSeries == nil {
-		return 0, fmt.Errorf("weight series not found in API response")
+		return 0, nil // no data for this period — skip silently
 	}
 
 	weights := weightSeries.FloatValues()
@@ -189,8 +199,9 @@ func (t *BackfillTask) backfillScale(ctx context.Context, scaleID string, startD
 		}
 	}
 
-	t.logger.Info("Backfill complete for scale",
+	t.logger.Info("Backfill chunk complete",
 		"scale", scaleID,
+		"year", startDate.Year(),
 		"records", inserted)
 
 	return inserted, nil

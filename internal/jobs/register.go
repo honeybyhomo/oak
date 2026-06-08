@@ -50,13 +50,14 @@ func RegisterAll(reg *job.Registry, db *sql.DB, cfg *config.Config, log *logger.
 	}
 
 	// Wolf Backfill — fetch historical data (no schedule, manual only)
+	// Fetches year by year from 2016 (scale's first year) to today
 	if err := reg.Register(&job.Definition{
 		Kind:        "wolf_backfill",
 		Name:        "Wolf Backfill",
-		Description: "Fetch and store historical measurements (7 days)",
+		Description: "Fetch and store all historical measurements (2016-present)",
 		Service:     "wolf",
 		Tasks: []job.Task{
-			tasks.NewBackfillTask(wolfClient, db, scales, 7, log),
+			tasks.NewBackfillTask(wolfClient, db, scales, 2016, log),
 		},
 		Schedules:      []string{}, // no automatic schedule
 		TimeoutMinutes: cfg.Jobs.Global.TimeoutMinutes,
