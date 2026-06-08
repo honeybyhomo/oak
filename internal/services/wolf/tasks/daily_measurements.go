@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/honeybyhomo/oak/internal/job"
@@ -117,14 +116,14 @@ func (t *DailyMeasurementsTask) fetchAndStore(ctx context.Context, scaleID strin
 			continue
 		}
 
-		weight := weightSeries.Values[i]
-		if math.IsNaN(weight) {
+		weight := weightSeries.Values[i].Float()
+		if !weightSeries.Values[i].IsValid() {
 			continue
 		}
 
 		var yieldVal sql.NullFloat64
-		if yieldSeries != nil && i < len(yieldSeries.Values) && !math.IsNaN(yieldSeries.Values[i]) {
-			yieldVal = sql.NullFloat64{Float64: yieldSeries.Values[i], Valid: true}
+		if yieldSeries != nil && i < len(yieldSeries.Values) && yieldSeries.Values[i].IsValid() {
+			yieldVal = sql.NullFloat64{Float64: yieldSeries.Values[i].Float(), Valid: true}
 		}
 
 		_, err := t.db.ExecContext(ctx, `

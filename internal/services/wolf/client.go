@@ -4,7 +4,10 @@ package wolf
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 
 	"resty.dev/v3"
@@ -54,9 +57,50 @@ type APIResponse struct {
 
 // Series represents a single data series in the API response
 type Series struct {
-	ID     string    `json:"id"`
-	Unit   string    `json:"unit"`
-	Values []float64 `json:"values,omitempty"`
+	ID     string       `json:"id"`
+	Unit   string       `json:"unit"`
+	Values []FloatValue `json:"values,omitempty"`
+}
+
+// FloatValue handles JSON values that can be either numbers or strings
+// The Wolf API returns temperature_glt as strings like "1032.0"
+type FloatValue float64
+
+func (f *FloatValue) UnmarshalJSON(data []byte) error {
+	// Try number first
+	var num float64
+	if err := json.Unmarshal(data, &num); err == nil {
+		*f = FloatValue(num)
+		return nil
+	}
+	// Try string
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		if s == "" {
+			*f = FloatValue(math.NaN())
+			return nil
+		}
+		parsed, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			*f = FloatValue(math.NaN())
+			return nil
+		}
+		*f = FloatValue(parsed)
+		return nil
+	}
+	// null
+	*f = FloatValue(math.NaN())
+	return nil
+}
+
+// Float returns the float64 value, or NaN if not valid
+func (f FloatValue) Float() float64 {
+	return float64(f)
+}
+
+// IsValid returns true if the value is a real number (not NaN)
+func (f FloatValue) IsValid() bool {
+	return !math.IsNaN(float64(f))
 }
 
 // Summary contains pre-aggregated statistics
