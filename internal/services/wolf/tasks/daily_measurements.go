@@ -45,7 +45,7 @@ func (t *DailyMeasurementsTask) Run(ctx context.Context) (*job.Result, error) {
 	}
 
 	now := time.Now().In(loc)
-	yesterday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	yesterday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -1)
 	today := yesterday.AddDate(0, 0, 1)
 
 	for _, scaleID := range t.scales {
