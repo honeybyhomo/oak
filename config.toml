@@ -32,9 +32,9 @@ timeout_minutes = 30
 batch_insert_size = 100
 
 # Wolf Daily — fetch and store yesterday's measurements
-# Runs at 02:00 Copenhagen time
+# Runs at 06:00 Copenhagen time (after scale has transmitted all data)
 [jobs.wolf_daily]
-schedules = ["0 2 * * *"]
+schedules = ["0 6 * * *"]
 
 # Wolf Notify — send daily digest to Mattermost
 # Runs at 08:00 Copenhagen time (after daily fetch)

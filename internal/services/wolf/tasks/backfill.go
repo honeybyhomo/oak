@@ -49,19 +49,20 @@ func (t *BackfillTask) Run(ctx context.Context) (*job.Result, error) {
 
 	now := time.Now().In(loc)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	yesterday := today.AddDate(0, 0, -1)
 
 	t.logger.Info("Starting backfill",
 		"from_year", t.startYear,
-		"to", today.Format("2006-01-02"))
+		"to", yesterday.Format("2006-01-02"))
 
 	// Fetch year by year to keep API requests manageable
 	for year := t.startYear; year <= now.Year(); year++ {
 		yearStart := time.Date(year, 1, 1, 0, 0, 0, 0, loc)
 		yearEnd := time.Date(year, 12, 31, 0, 0, 0, 0, loc)
 
-		// Don't fetch beyond today
-		if yearEnd.After(today) {
-			yearEnd = today
+		// Don't fetch beyond yesterday (today may be incomplete)
+		if yearEnd.After(yesterday) {
+			yearEnd = yesterday
 		}
 
 		for _, scaleID := range t.scales {
