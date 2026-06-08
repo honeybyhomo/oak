@@ -47,8 +47,19 @@ func (t *NotifyTask) Run(ctx context.Context) (*job.Result, error) {
 	now := time.Now().In(loc)
 	yesterday := now.AddDate(0, 0, -1)
 
+	// Determine if this is a weekly notification (Monday = Sunday was last day of week)
+	isWeekly := now.Weekday() == time.Monday
+
 	for _, scaleID := range t.scales {
-		message, err := t.buildMessage(ctx, scaleID, yesterday)
+		var message string
+		if isWeekly {
+			// Weekly: sum yield for the previous week (Mon-Sun)
+			weekEnd := yesterday                   // Sunday
+			weekStart := weekEnd.AddDate(0, 0, -6) // Monday
+			message, err = t.buildWeeklyMessage(ctx, scaleID, weekStart, weekEnd)
+		} else {
+			message, err = t.buildDailyMessage(ctx, scaleID, yesterday)
+		}
 		if err != nil {
 			t.logger.Error("Failed to build message", "scale", scaleID, "error", err)
 			continue
@@ -65,104 +76,188 @@ func (t *NotifyTask) Run(ctx context.Context) (*job.Result, error) {
 	}, nil
 }
 
-type reportData struct {
-	Date           string
-	Weight         sql.NullFloat64
-	Yield          sql.NullFloat64
-	SeasonTotal    sql.NullFloat64
-	TempMin        sql.NullFloat64
-	TempMax        sql.NullFloat64
-	TempAvg        sql.NullFloat64
-	LastInspection sql.NullTime
-}
-
-func (t *NotifyTask) buildMessage(ctx context.Context, scaleID string, date time.Time) (string, error) {
-	var data reportData
-	data.Date = date.Format("2. January 2006")
-
-	// Get scale UUID
-	var scaleUUID string
-	err := t.db.QueryRowContext(ctx, `SELECT id FROM wolf_scale WHERE scale_id = $1`, scaleID).Scan(&scaleUUID)
+// getScaleUUID returns the internal UUID for a scale
+func (t *NotifyTask) getScaleUUID(ctx context.Context, scaleID string) (string, error) {
+	var uuid string
+	err := t.db.QueryRowContext(ctx, `SELECT id FROM wolf_scale WHERE scale_id = $1`, scaleID).Scan(&uuid)
 	if err != nil {
 		return "", fmt.Errorf("scale %s not found: %w", scaleID, err)
 	}
+	return uuid, nil
+}
 
-	// Yesterday's measurement
-	err = t.db.QueryRowContext(ctx, `
-		SELECT weight, yield, temp_min, temp_max, temp_avg
-		FROM wolf_measurement
-		WHERE scale_id = $1 AND date = $2
-	`, scaleUUID, date.Format("2006-01-02")).Scan(&data.Weight, &data.Yield, &data.TempMin, &data.TempMax, &data.TempAvg)
-	if err != nil {
-		return "", fmt.Errorf("no measurement for %s: %w", date.Format("2006-01-02"), err)
+// getSinceHarvest returns the yield sum since the last harvest (or April 1 if no harvest)
+func (t *NotifyTask) getSinceHarvest(ctx context.Context, scaleUUID string, year int) (float64, error) {
+	// Check for last harvest
+	var lastHarvest sql.NullTime
+	_ = t.db.QueryRowContext(ctx, `
+		SELECT MAX(date) FROM wolf_harvest WHERE scale_id = $1
+	`, scaleUUID).Scan(&lastHarvest)
+
+	var since time.Time
+	if lastHarvest.Valid {
+		since = lastHarvest.Time
+	} else {
+		// No harvest — use April 1 of the current year
+		since = time.Date(year, 4, 1, 0, 0, 0, 0, time.UTC)
 	}
 
-	// Season total (from April 1st of current year)
-	year := date.Year()
-	seasonStart := fmt.Sprintf("%d-04-01", year)
-	err = t.db.QueryRowContext(ctx, `
+	var total sql.NullFloat64
+	err := t.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(yield), 0)
+		FROM wolf_measurement
+		WHERE scale_id = $1 AND date > $2
+	`, scaleUUID, since.Format("2006-01-02")).Scan(&total)
+	if err != nil {
+		return 0, err
+	}
+	return total.Float64, nil
+}
+
+// getSeasonTotal returns the yield sum since April 1 of the given year
+func (t *NotifyTask) getSeasonTotal(ctx context.Context, scaleUUID string, year int) (float64, error) {
+	seasonStart := time.Date(year, 4, 1, 0, 0, 0, 0, time.UTC)
+	var total sql.NullFloat64
+	err := t.db.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(yield), 0)
 		FROM wolf_measurement
 		WHERE scale_id = $1 AND date >= $2
-	`, scaleUUID, seasonStart).Scan(&data.SeasonTotal)
+	`, scaleUUID, seasonStart.Format("2006-01-02")).Scan(&total)
 	if err != nil {
-		return "", fmt.Errorf("failed to get season total: %w", err)
+		return 0, err
 	}
+	return total.Float64, nil
+}
 
-	// Last inspection
-	err = t.db.QueryRowContext(ctx, `
+// getLastInspection returns the date of the last checkup, formatted in Danish
+func (t *NotifyTask) getLastInspection(ctx context.Context, scaleUUID string) string {
+	var lastDate sql.NullTime
+	err := t.db.QueryRowContext(ctx, `
 		SELECT date FROM wolf_checkup
 		WHERE scale_id = $1
 		ORDER BY date DESC
 		LIMIT 1
-	`, scaleUUID).Scan(&data.LastInspection)
-	if err != nil && err != sql.ErrNoRows {
-		t.logger.Warn("Failed to get last inspection", "error", err)
+	`, scaleUUID).Scan(&lastDate)
+	if err != nil || !lastDate.Valid {
+		return "Ingen"
 	}
-
-	return t.formatMessage(data), nil
+	return formatDanishDate(lastDate.Time)
 }
 
-func (t *NotifyTask) formatMessage(data reportData) string {
-	// Daily yield heading
-	yieldStr := formatKg(data.Yield)
-	heading := fmt.Sprintf("### 🍯 %s kg", yieldStr)
+// formatDanishDate formats a date as "7. juni 2026"
+func formatDanishDate(t time.Time) string {
+	months := []string{
+		"", "januar", "februar", "marts", "april", "maj", "juni",
+		"juli", "august", "september", "oktober", "november", "december",
+	}
+	return fmt.Sprintf("%d. %s %d", t.Day(), months[t.Month()], t.Year())
+}
 
-	// Season total and since-harvest (same for now — no harvest tracking yet)
-	seasonStr := formatKg(data.SeasonTotal)
+// buildDailyMessage creates the daily one-liner notification
+func (t *NotifyTask) buildDailyMessage(ctx context.Context, scaleID string, date time.Time) (string, error) {
+	scaleUUID, err := t.getScaleUUID(ctx, scaleID)
+	if err != nil {
+		return "", err
+	}
 
-	// Weight
-	weightStr := formatKg(data.Weight)
+	// Yesterday's yield
+	var dailyYield sql.NullFloat64
+	err = t.db.QueryRowContext(ctx, `
+		SELECT yield FROM wolf_measurement
+		WHERE scale_id = $1 AND date = $2
+	`, scaleUUID, date.Format("2006-01-02")).Scan(&dailyYield)
+	if err != nil {
+		return "", fmt.Errorf("no measurement for %s: %w", date.Format("2006-01-02"), err)
+	}
 
-	// Temperature
-	tempStr := "N/A"
-	if data.TempMin.Valid && data.TempMax.Valid && data.TempAvg.Valid {
-		tempStr = fmt.Sprintf("min %.1f°C · max %.1f°C · snit %.1f°C",
-			data.TempMin.Float64, data.TempMax.Float64, data.TempAvg.Float64)
+	// Since last harvest
+	sinceHarvest, err := t.getSinceHarvest(ctx, scaleUUID, date.Year())
+	if err != nil {
+		return "", fmt.Errorf("failed to get since-harvest: %w", err)
+	}
+
+	yieldStr := formatYield(dailyYield.Float64)
+	sinceStr := formatKg(sinceHarvest)
+
+	return fmt.Sprintf("### 🍯 %s kg // %s kg", yieldStr, sinceStr), nil
+}
+
+// buildWeeklyMessage creates the weekly summary notification
+func (t *NotifyTask) buildWeeklyMessage(ctx context.Context, scaleID string, weekStart, weekEnd time.Time) (string, error) {
+	scaleUUID, err := t.getScaleUUID(ctx, scaleID)
+	if err != nil {
+		return "", err
+	}
+
+	// Weekly yield (sum of the week)
+	var weeklyYield sql.NullFloat64
+	err = t.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(yield), 0) FROM wolf_measurement
+		WHERE scale_id = $1 AND date >= $2 AND date <= $3
+	`, scaleUUID, weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02")).Scan(&weeklyYield)
+	if err != nil {
+		return "", fmt.Errorf("failed to get weekly yield: %w", err)
+	}
+
+	// Since last harvest
+	sinceHarvest, err := t.getSinceHarvest(ctx, scaleUUID, weekEnd.Year())
+	if err != nil {
+		return "", fmt.Errorf("failed to get since-harvest: %w", err)
+	}
+
+	// Season total
+	seasonTotal, err := t.getSeasonTotal(ctx, scaleUUID, weekEnd.Year())
+	if err != nil {
+		return "", fmt.Errorf("failed to get season total: %w", err)
+	}
+
+	// End-of-week weight
+	var weight sql.NullFloat64
+	err = t.db.QueryRowContext(ctx, `
+		SELECT weight FROM wolf_measurement
+		WHERE scale_id = $1 AND date = $2
+	`, scaleUUID, weekEnd.Format("2006-01-02")).Scan(&weight)
+	if err != nil {
+		return "", fmt.Errorf("no measurement for end of week %s: %w", weekEnd.Format("2006-01-02"), err)
 	}
 
 	// Last inspection
-	inspectionStr := "Ingen"
-	if data.LastInspection.Valid {
-		inspectionStr = data.LastInspection.Time.Format("02/01/2006")
-	}
+	inspectionStr := t.getLastInspection(ctx, scaleUUID)
 
-	return fmt.Sprintf(`%s
+	// Format
+	yieldStr := formatYield(weeklyYield.Float64)
+	sinceStr := formatKg(sinceHarvest)
+	totalStr := formatKg(seasonTotal)
+	weightStr := formatKg(weight.Float64)
 
-**🍯 Siden honningfratagning:** %s kg
+	return fmt.Sprintf(`### 🍯 %s kg // %s kg
+
 **🍯 Total:** %s kg
 **⚖️ Vægt:** %s kg
-**🌡️ Temperatur:** %s
-**📅 Dato:** %s
 **🔍 Sidste inspektion:** %s`,
-		heading, seasonStr, seasonStr, weightStr, tempStr, data.Date, inspectionStr)
+		yieldStr, sinceStr, totalStr, weightStr, inspectionStr), nil
 }
 
-func formatKg(v sql.NullFloat64) string {
-	if !v.Valid {
-		return "N/A"
+// formatKg formats a float as European-style kg (comma decimal, 2 decimals)
+func formatKg(v float64) string {
+	str := fmt.Sprintf("%.2f", v)
+	// Replace period with comma for European number format
+	for i := range str {
+		if str[i] == '.' {
+			str = str[:i] + "," + str[i+1:]
+			break
+		}
 	}
-	return fmt.Sprintf("%.2f", v.Float64)
+	return str
+}
+
+// formatYield formats a yield value with explicit +/- sign and European decimal
+func formatYield(v float64) string {
+	str := formatKg(v)
+	if v >= 0 {
+		return "+" + str
+	}
+	return str // already has minus sign
 }
 
 func (t *NotifyTask) sendToMattermost(ctx context.Context, message string) error {

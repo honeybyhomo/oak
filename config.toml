@@ -37,7 +37,8 @@ batch_insert_size = 100
 schedules = ["0 6 * * *"]
 
 # Wolf Notify — send daily digest to Mattermost
-# Runs at 08:00 Copenhagen time (after daily fetch)
+# Runs at 08:00 Copenhagen time every day
+# Monday = weekly summary, other days = daily one-liner
 [jobs.wolf_notify]
 schedules = ["0 8 * * *"]
 
