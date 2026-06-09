@@ -163,15 +163,7 @@ Deployed via **Dockhand** as a Git stack watching `honeybyhomo/oak` on `main`. P
 
 ### Rebuilding after code changes
 
-Currently, Dockhand may cache the Docker image. To force a clean rebuild:
-
-```bash
-# On TrueNAS
-docker stop oak && docker rm oak && docker rmi oak:latest
-# Then hit Deploy in Dockhand UI
-```
-
-> **TODO:** Find a better workflow for forcing clean rebuilds through Dockhand.
+Dockhand has `buildOnDeploy: true` enabled for the Oak stack. Every push to `main` triggers a fresh `docker compose build` + `up`, so code changes are picked up automatically.
 
 ## Code Style Guidelines
 

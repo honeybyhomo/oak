@@ -2,7 +2,7 @@
 #
 # Dockhand setup:
 #   Compose path: compose.yaml
-#   Build on deploy: Yes
+#   Build on deploy: Yes (buildOnDeploy: true)
 #   Secrets (Dockhand → environment:):
 #     OAK__DATABASE__PASSWORD
 #     OAK__JOBS__MATTERMOST__WEBHOOK_URL
