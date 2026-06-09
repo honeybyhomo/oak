@@ -132,11 +132,20 @@ type Checkup struct {
 
 // FetchDailyData fetches daily measurements for a scale between start and end dates
 func (c *Client) FetchDailyData(ctx context.Context, scaleID string, start, end time.Time) (*APIResponse, error) {
+	return c.fetchData(ctx, scaleID, "day", start, end)
+}
+
+// FetchHourlyData fetches hourly measurements for a scale between start and end dates
+func (c *Client) FetchHourlyData(ctx context.Context, scaleID string, start, end time.Time) (*APIResponse, error) {
+	return c.fetchData(ctx, scaleID, "hour", start, end)
+}
+
+func (c *Client) fetchData(ctx context.Context, scaleID, interval string, start, end time.Time) (*APIResponse, error) {
 	startMs := start.UnixMilli()
 	endMs := end.UnixMilli()
 
-	url := fmt.Sprintf("/graph/stock/%s?interval=day&start=%d&end=%d",
-		scaleID, startMs, endMs)
+	url := fmt.Sprintf("/graph/stock/%s?interval=%s&start=%d&end=%d",
+		scaleID, interval, startMs, endMs)
 
 	var resp APIResponse
 	r, err := c.client.R().
@@ -144,7 +153,7 @@ func (c *Client) FetchDailyData(ctx context.Context, scaleID string, start, end 
 		SetResult(&resp).
 		Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch daily data: %w", err)
+		return nil, fmt.Errorf("failed to fetch %s data: %w", interval, err)
 	}
 
 	if r.StatusCode() != 200 {

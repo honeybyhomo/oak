@@ -40,6 +40,7 @@ internal/
     migrate.go                           # Goose migrations (embedded)
     null.go                              # sql.Null* helpers
     migrations/001_init.sql              # wolf_scale, wolf_measurement, wolf_checkup, wolf_harvest
+    migrations/002_hourly_and_notification_log.sql  # wolf_hourly, wolf_notification_log
   job/                                   # Job framework (simplified, no full sync concept)
     types.go                             # Task, Result, Definition
     registry.go                          # Job registration
@@ -51,9 +52,9 @@ internal/
   services/wolf/
     client.go                            # Wolf Waagen API client
     tasks/
-      daily_measurements.go              # Fetch + upsert yesterday's data
+      hourly_sync.go                   # Fetch hourly data + send notifications when data is complete
       backfill.go                        # Historical data fetch (year-by-year)
-      notify.go                          # Query DB → format → Mattermost webhook
+      format.go                           # Formatting helpers (Danish dates, European numbers)
 compose.yaml                             # Traefik + postgres-apps networks
 Dockerfile                               # Multi-stage build
 config.toml                              # All config (secrets = placeholder values)
@@ -75,9 +76,11 @@ Oak uses the shared `postgres-apps` instance on TrueNAS. Connection details:
 | Table | Purpose |
 |-------|---------|
 | `wolf_scale` | Bee hive scales (UUID, scale ID, name, GPS) |
-| `wolf_measurement` | Daily measurements (weight, yield, temp min/max/avg) |
+| `wolf_hourly` | Hourly measurements (weight, yield, yield_sum, temperature) |
+| `wolf_measurement` | Daily measurements (legacy, no longer written to) |
 | `wolf_checkup` | Scale on/off events (inspections) from the API |
 | `wolf_harvest` | Manually recorded honey harvests (not yet in use) |
+| `wolf_notification_log` | Tracks which daily/weekly notifications have been sent |
 | `river_job` | River's job queue table |
 
 ### Migrations
@@ -96,9 +99,8 @@ goose -dir internal/database/migrations create <name> sql
 
 | Job | Schedule | Description |
 |-----|----------|-------------|
-| `wolf_daily` | 06:00 CEST daily | Fetch yesterday's measurements + checkup items from API → upsert into DB |
-| `wolf_notify` | 08:00 CEST daily | Daily one-liner (yield + since-harvest). On Monday also sends weekly summary. |
-| `wolf_backfill` | Manual only | Fetch historical data year-by-year from 2016 to yesterday |
+| `wolf_hourly` | Every hour | Fetch hourly data from API → upsert into DB. Checks if yesterday's data is complete (has 23:00 entry) → sends daily notification. On Monday also sends weekly summary. |
+| `wolf_backfill` | Manual only | Fetch historical data year-by-year from 2016 to yesterday (uses daily endpoint) |
 
 ### Triggering manual jobs
 
@@ -121,11 +123,12 @@ GET https://app.wolf-waagen.de/graph/stock/{scaleId}?interval=day&start={epoch_m
 
 ### Important details
 - `interval=day` returns pre-aggregated daily values (weight = 00:00 reading, yield = corrected daily change)
-- `interval=hour` returns hourly readings
+- `interval=hour` returns hourly readings with weight, yield, yield_sum (cumulative daily), temperature
+- The daily endpoint's pre-aggregated yield may change throughout the day as more hourly data arrives. We use `interval=hour` and take the `yield_sum` at 23:00 as the definitive daily yield.
 - `values` field can be: `null`, numbers, strings, arrays of numbers, or objects — handled with `json.RawMessage`
 - Timestamps are epoch milliseconds. Use Copenhagen timezone (CEST/CET) for midnight boundaries.
-- The scale transmits data every ~6 hours. A complete day (with 23:00 reading) is available by ~05:00 the next morning.
-- Do **not** store today's data from the daily endpoint — it may be incomplete.
+- The scale transmits data every ~6 hours. The 23:00 reading for a day may not arrive until late morning or afternoon the next day — timing varies.
+- We store hourly data and send the daily notification only once the 23:00 entry is available.
 
 ### Scale IDs
 - `G58E19` — "Valby" (55.6°N, 12.5°E), data since 2023
@@ -134,18 +137,21 @@ GET https://app.wolf-waagen.de/graph/stock/{scaleId}?interval=day&start={epoch_m
 
 ### Daily (every day including Monday)
 ```
-### +0,04 kg // 6,32 kg
+Søn 8/6: 🍯 **-0,05 kg** // 6,27 kg
 ```
-One line: `[daily yield] // [since last harvest (or April 1)]`
+One line: `[weekday date]: 🍯 **[daily yield]** // [since last harvest (or April 1)]`
+
+Sent once the 23:00 hourly entry for yesterday is available. Tracked in `wolf_notification_log`.
 
 ### Weekly (Monday, extra message)
 ```
-**🍯 Ugentlig:** 2,32 kg
-**🍯 Siden honningfratagning:** 6,32 kg
+Søn 8/6: 🍯 **-0,09 kg** // 6,27 kg
+
 **🍯 Total:** 10,55 kg
-**⚖️ Vægt:** 49,33 kg
+**⚖️ Vægt:** 49,285 kg
 **🔍 Sidste inspektion:** 7. juni 2026
 ```
+First line is the daily, followed by season total, weight, and last inspection.
 
 ### Number format
 - European: comma decimal (0,04 not 0.04)

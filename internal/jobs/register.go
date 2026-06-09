@@ -14,35 +14,19 @@ import (
 func RegisterAll(reg *job.Registry, db *sql.DB, cfg *config.Config, log *logger.Logger) error {
 	wolfClient := wolf.New(&cfg.Services.Wolf, log)
 
-	// Scales to fetch data for (read from config or hardcode for now)
+	// Scales to fetch data for
 	scales := []string{"G58E19"}
 
-	// Wolf Daily — fetch and store yesterday's measurements
+	// Wolf Hourly Sync — fetch hourly data and send notifications when ready
 	if err := reg.Register(&job.Definition{
-		Kind:        "wolf_daily",
-		Name:        "Wolf Daily",
-		Description: "Fetch and store daily measurements from Wolf Waagen",
+		Kind:        "wolf_hourly",
+		Name:        "Wolf Hourly Sync",
+		Description: "Fetch hourly measurements from Wolf Waagen and send notifications when data is complete",
 		Service:     "wolf",
 		Tasks: []job.Task{
-			tasks.NewDailyMeasurementsTask(wolfClient, db, scales, log),
+			tasks.NewHourlySyncTask(wolfClient, db, &cfg.Jobs.Mattermost, scales, log),
 		},
-		Schedules:      cfg.Jobs.WolfDaily.Schedules,
-		TimeoutMinutes: cfg.Jobs.Global.TimeoutMinutes,
-		MaxAttempts:    cfg.Jobs.Global.MaxAttempts,
-	}); err != nil {
-		return err
-	}
-
-	// Wolf Notify — send daily digest to Mattermost
-	if err := reg.Register(&job.Definition{
-		Kind:        "wolf_notify",
-		Name:        "Wolf Notify",
-		Description: "Send daily bee measurement digest to Mattermost",
-		Service:     "wolf",
-		Tasks: []job.Task{
-			tasks.NewNotifyTask(db, &cfg.Jobs.Mattermost, scales, log),
-		},
-		Schedules:      cfg.Jobs.WolfNotify.Schedules,
+		Schedules:      cfg.Jobs.WolfHourly.Schedules,
 		TimeoutMinutes: cfg.Jobs.Global.TimeoutMinutes,
 		MaxAttempts:    cfg.Jobs.Global.MaxAttempts,
 	}); err != nil {

@@ -60,9 +60,8 @@ type WolfConfig struct {
 
 type JobsConfig struct {
 	Global         JobsGlobalConfig `koanf:"global"`
-	WolfDaily      JobConfig        `koanf:"wolf_daily"`
+	WolfHourly     JobConfig        `koanf:"wolf_hourly"`
 	WolfHistorical JobConfig        `koanf:"wolf_historical"`
-	WolfNotify     JobConfig        `koanf:"wolf_notify"`
 	SystemCleanup  JobConfig        `koanf:"system_cleanup"`
 	Mattermost     MattermostConfig `koanf:"mattermost"`
 }
