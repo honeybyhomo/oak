@@ -51,6 +51,6 @@ func (s *Scheduler) createPeriodicJob(def *Definition, schedule cron.Schedule) *
 					MaxAttempts: def.MaxAttempts,
 				}
 		},
-		&river.PeriodicJobOpts{RunOnStart: true},
+		&river.PeriodicJobOpts{RunOnStart: false},
 	)
 }

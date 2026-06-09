@@ -200,7 +200,7 @@ func (t *NotifyTask) buildDailyMessage(ctx context.Context, scaleID string, date
 	dayAbbr := danishWeekdays[date.Weekday()]
 	dateStr := fmt.Sprintf("%d/%d", date.Day(), date.Month())
 
-	return fmt.Sprintf("%s %s: 🍯 %s kg // %s kg", dayAbbr, dateStr, yieldStr, sinceStr), nil
+	return fmt.Sprintf("%s %s: 🍯 **%s kg** // %s kg", dayAbbr, dateStr, yieldStr, sinceStr), nil
 }
 
 // buildWeeklyMessage creates the weekly summary notification
