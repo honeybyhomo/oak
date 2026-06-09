@@ -50,27 +50,29 @@ func (t *NotifyTask) Run(ctx context.Context) (*job.Result, error) {
 	// Determine if this is a weekly notification (Monday = Sunday was last day of week)
 	isWeekly := now.Weekday() == time.Monday
 
-	var message string
-	var err error
+	var (
+		message  string
+		outerErr error
+	)
 
 	for _, scaleID := range t.scales {
 		// Always send daily notification
-		message, err = t.buildDailyMessage(ctx, scaleID, yesterday)
-		if err != nil {
-			t.logger.Error("Failed to build daily message", "scale", scaleID, "error", err)
-		} else if err := t.sendToMattermost(ctx, message); err != nil {
-			return nil, fmt.Errorf("failed to send daily notification: %w", err)
+		message, outerErr = t.buildDailyMessage(ctx, scaleID, yesterday)
+		if outerErr != nil {
+			t.logger.Error("Failed to build daily message", "scale", scaleID, "error", outerErr)
+		} else if outerErr = t.sendToMattermost(ctx, message); outerErr != nil {
+			return nil, fmt.Errorf("failed to send daily notification: %w", outerErr)
 		}
 
 		// On Monday, also send weekly summary
 		if isWeekly {
 			weekEnd := yesterday                   // Sunday
 			weekStart := weekEnd.AddDate(0, 0, -6) // Monday
-			message, err = t.buildWeeklyMessage(ctx, scaleID, weekStart, weekEnd)
-			if err != nil {
-				t.logger.Error("Failed to build weekly message", "scale", scaleID, "error", err)
-			} else if err := t.sendToMattermost(ctx, message); err != nil {
-				return nil, fmt.Errorf("failed to send weekly notification: %w", err)
+			message, outerErr = t.buildWeeklyMessage(ctx, scaleID, weekStart, weekEnd)
+			if outerErr != nil {
+				t.logger.Error("Failed to build weekly message", "scale", scaleID, "error", outerErr)
+			} else if outerErr = t.sendToMattermost(ctx, message); outerErr != nil {
+				return nil, fmt.Errorf("failed to send weekly notification: %w", outerErr)
 			}
 		}
 	}
