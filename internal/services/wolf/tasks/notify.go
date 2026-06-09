@@ -160,6 +160,17 @@ func formatDanishDate(t time.Time) string {
 	return fmt.Sprintf("%d. %s %d", t.Day(), months[t.Month()], t.Year())
 }
 
+// danishWeekdays maps time.Weekday to Danish abbreviations
+var danishWeekdays = map[time.Weekday]string{
+	time.Monday:    "Man",
+	time.Tuesday:   "Tir",
+	time.Wednesday: "Ons",
+	time.Thursday:  "Tor",
+	time.Friday:    "Fre",
+	time.Saturday:  "Lør",
+	time.Sunday:    "Søn",
+}
+
 // buildDailyMessage creates the daily one-liner notification
 func (t *NotifyTask) buildDailyMessage(ctx context.Context, scaleID string, date time.Time) (string, error) {
 	scaleUUID, err := t.getScaleUUID(ctx, scaleID)
@@ -186,7 +197,10 @@ func (t *NotifyTask) buildDailyMessage(ctx context.Context, scaleID string, date
 	yieldStr := formatYield(dailyYield.Float64)
 	sinceStr := formatKg(sinceHarvest)
 
-	return fmt.Sprintf("### 🍯 %s kg // %s kg", yieldStr, sinceStr), nil
+	dayAbbr := danishWeekdays[date.Weekday()]
+	dateStr := fmt.Sprintf("%d/%d", date.Day(), date.Month())
+
+	return fmt.Sprintf("%s %s: 🍯 %s kg // %s kg", dayAbbr, dateStr, yieldStr, sinceStr), nil
 }
 
 // buildWeeklyMessage creates the weekly summary notification
