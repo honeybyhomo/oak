@@ -11,6 +11,9 @@ ARG CACHEBUST=1
 
 COPY . .
 
+# Reference the ARG to invalidate the cache for this and all subsequent layers
+RUN echo "Build ${CACHEBUST}" > /dev/null
+
 RUN CGO_ENABLED=0 GOOS=linux go build -o /oak ./cmd/main.go
 
 # Runtime stage
