@@ -1,6 +1,6 @@
 **/.git
-**/.gitignore
 .env.dev
-.env.dev.*
-*.md
 bin/
+# Stale files from Dockhand git sync not cleaning up deletions
+internal/services/wolf/tasks/notify.go
+internal/services/wolf/tasks/daily_measurements.go
