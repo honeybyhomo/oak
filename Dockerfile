@@ -6,6 +6,9 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
+# Bust cache to ensure fresh build
+ARG CACHEBUST=1
+
 COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /oak ./cmd/main.go
