@@ -15,6 +15,7 @@ COPY . .
 RUN echo "Build ${CACHEBUST}" > /dev/null
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /oak ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /oak-notify ./cmd/notify
 
 # Runtime stage
 FROM alpine:3.19
@@ -24,6 +25,7 @@ WORKDIR /app
 RUN apk --no-cache add ca-certificates tzdata
 
 COPY --from=builder /oak /oak
+COPY --from=builder /oak-notify /oak-notify
 COPY config.toml /app/config.toml
 
 RUN mkdir -p /app/logs

@@ -167,6 +167,19 @@ Deployed via **Dockhand** as a Git stack watching `honeybyhomo/oak` on `main`. P
 | `DB_PASSWORD` | PostgreSQL password for the `oak` user |
 | `MATTERMOST_WEBHOOK_URL` | Incoming webhook URL for the biavl channel |
 
+### Sending test notifications
+
+The `oak-notify` binary is built into the Docker image for ad-hoc notification testing:
+
+```bash
+# Inside the running container
+ssh root@100.67.109.87 "docker exec oak /oak-notify daily --dry-run"
+ssh root@100.67.109.87 "docker exec oak /oak-notify weekly --dry-run"
+ssh root@100.67.109.87 "docker exec oak /oak-notify both"          # sends both to Mattermost
+```
+
+It finds the most recent date with complete hourly data and builds the message using the same queries as the scheduler. `--dry-run` prints without sending. Note: it does NOT write to `wolf_notification_log`, so the regular hourly job may still send a duplicate.
+
 ### Rebuilding after code changes
 
 Dockhand has `buildOnDeploy: true` enabled for the Oak stack. Every push to `main` triggers a fresh `docker compose build` + `up`, so code changes are picked up automatically.
