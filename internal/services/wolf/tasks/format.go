@@ -16,10 +16,15 @@ var danishWeekdays = map[time.Weekday]string{
 	time.Sunday:    "Søn",
 }
 
-// formatISOWeek returns the ISO week number for a date (e.g., "24")
-func formatISOWeek(t time.Time) string {
+// FormatISOWeek returns the ISO week number for a date (exported for CLI use)
+func FormatISOWeek(t time.Time) string {
 	_, week := t.ISOWeek()
 	return fmt.Sprintf("%d", week)
+}
+
+// formatISOWeek returns the ISO week number for a date (e.g., "24")
+func formatISOWeek(t time.Time) string {
+	return FormatISOWeek(t)
 }
 
 // formatDanishDate formats a date as "7. juni 2026"

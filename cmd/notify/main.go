@@ -92,11 +92,17 @@ func main() {
 	}
 
 	if notifType == "weekly" || notifType == "both" {
-		weekStart := date.AddDate(0, 0, -int(date.Weekday()-time.Monday))
-		if date.Weekday() == time.Sunday {
-			weekStart = date.AddDate(0, 0, -6)
+		// Find the most recent completed week (ending on Sunday with 23:00 data)
+		weekEnd, err := findMostRecentCompleteSunday(db.DB, scaleUUID, loc)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to find completed week: %v\n", err)
+			os.Exit(1)
 		}
-		msg, err := helper.BuildWeeklyMessage(context.Background(), scaleUUID, weekStart, date, loc)
+		weekStart := weekEnd.AddDate(0, 0, -6) // Monday
+
+		fmt.Printf("Weekly for week %s (%s – %s)\n", tasks.FormatISOWeek(weekEnd), weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
+
+		msg, err := helper.BuildWeeklyMessage(context.Background(), scaleUUID, weekStart, weekEnd, loc)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to build weekly message: %v\n", err)
 			os.Exit(1)
@@ -132,6 +138,25 @@ func findMostRecentCompleteDay(db *sql.DB, scaleUUID string, loc *time.Location)
 	}
 	if ts.IsZero() {
 		return time.Time{}, fmt.Errorf("no complete days found")
+	}
+	return ts, nil
+}
+
+func findMostRecentCompleteSunday(db *sql.DB, scaleUUID string, loc *time.Location) (time.Time, error) {
+	var ts time.Time
+	err := db.QueryRowContext(context.Background(), `
+		SELECT MAX(DATE(timestamp AT TIME ZONE 'Europe/Copenhagen'))
+		FROM wolf_hourly
+		WHERE scale_id = $1
+			AND EXTRACT(HOUR FROM timestamp AT TIME ZONE 'Europe/Copenhagen') = 23
+			AND yield IS NOT NULL
+			AND EXTRACT(DOW FROM timestamp AT TIME ZONE 'Europe/Copenhagen') = 0
+	`, scaleUUID).Scan(&ts)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("query failed: %w", err)
+	}
+	if ts.IsZero() {
+		return time.Time{}, fmt.Errorf("no complete Sunday found")
 	}
 	return ts, nil
 }
