@@ -419,11 +419,11 @@ func (t *HourlySyncTask) buildWeeklyMessage(ctx context.Context, scaleUUID strin
 
 	return fmt.Sprintf(`Uge %s: 🍯 **%s kg**
 
-**🍯 Total:** %s kg
 **🍯 Total siden sidste høst:** %s kg
+**🍯 Total:** %s kg
 **⚖️ Vægt:** %s kg
 **🔍 Sidste inspektion:** %s`,
-		weekNum, yieldStr, seasonStr, sinceStr, weightStr, inspectionStr), nil
+		weekNum, yieldStr, sinceStr, seasonStr, weightStr, inspectionStr), nil
 }
 
 func (t *HourlySyncTask) sendToMattermost(ctx context.Context, message string) error {

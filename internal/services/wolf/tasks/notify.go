@@ -90,11 +90,11 @@ func (h *NotifyHelper) BuildWeeklyMessage(ctx context.Context, scaleUUID string,
 
 	return fmt.Sprintf(`Uge %s: 🍯 **%s kg**
 
-**🍯 Total:** %s kg
 **🍯 Total siden sidste høst:** %s kg
+**🍯 Total:** %s kg
 **⚖️ Vægt:** %s kg
 **🔍 Sidste inspektion:** %s`,
-		weekNum, yieldStr, seasonStr, sinceStr, weightStr, inspectionStr), nil
+		weekNum, yieldStr, sinceStr, seasonStr, weightStr, inspectionStr), nil
 }
 
 // SendToMattermost sends a message to the configured Mattermost webhook.
