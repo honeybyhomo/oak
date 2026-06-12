@@ -319,21 +319,28 @@ func (t *HourlySyncTask) getScaleUUID(ctx context.Context, scaleID string) (stri
 	return uuid, nil
 }
 
-// getDailyYield returns the yield_sum at 23:00 for the given date (the daily yield)
+// getDailyYield returns the total daily yield for the given date by summing hourly yields.
+// The API's yield_sum field is cumulative (relative to the fetch window) and cannot be
+// used as a daily yield value.
 func (t *HourlySyncTask) getDailyYield(ctx context.Context, scaleUUID string, date time.Time, loc *time.Location) (float64, error) {
-	hour23 := time.Date(date.Year(), date.Month(), date.Day(), 23, 0, 0, 0, loc)
-	var yieldSum sql.NullFloat64
+	var total sql.NullFloat64
 	err := t.db.QueryRowContext(ctx, `
-		SELECT yield_sum FROM wolf_hourly
-		WHERE scale_id = $1 AND timestamp = $2
-	`, scaleUUID, hour23.UTC()).Scan(&yieldSum)
+		SELECT SUM(yield) FROM wolf_hourly
+		WHERE scale_id = $1 AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') = $2
+	`, scaleUUID, date.Format("2006-01-02")).Scan(&total)
 	if err != nil {
-		return 0, fmt.Errorf("no 23:00 entry for %s: %w", date.Format("2006-01-02"), err)
+		return 0, fmt.Errorf("no hourly data for %s: %w", date.Format("2006-01-02"), err)
 	}
-	return yieldSum.Float64, nil
+	if !total.Valid {
+		return 0, fmt.Errorf("no hourly data for %s", date.Format("2006-01-02"))
+	}
+	return total.Float64, nil
 }
 
-// getSinceHarvest returns the yield sum since the last harvest (or April 1)
+// getSinceHarvest returns the total yield since the last harvest (or April 1).
+// It combines data from wolf_hourly (for dates with hourly data) and wolf_measurement
+// (for historical dates with daily data only), using SUM(yield) from hourly data
+// where available since the API's yield_sum is cumulative relative to the fetch window.
 func (t *HourlySyncTask) getSinceHarvest(ctx context.Context, scaleUUID string, year int, loc *time.Location) (float64, error) {
 	// Check for last harvest
 	var lastHarvest sql.NullTime
@@ -348,24 +355,40 @@ func (t *HourlySyncTask) getSinceHarvest(ctx context.Context, scaleUUID string, 
 		since = time.Date(year, 4, 1, 0, 0, 0, 0, loc)
 	}
 
-	// Sum daily yields (23:00 yield_sum) for each day after the harvest date
-	var total sql.NullFloat64
+	sinceStr := since.Format("2006-01-02")
+
+	// Get hourly-based yields
+	var hourlyTotal sql.NullFloat64
 	err := t.db.QueryRowContext(ctx, `
-		WITH daily_yields AS (
-			SELECT DISTINCT ON (DATE(timestamp AT TIME ZONE 'Europe/Copenhagen'))
-				yield_sum
-			FROM wolf_hourly
-			WHERE scale_id = $1
-				AND EXTRACT(HOUR FROM timestamp AT TIME ZONE 'Europe/Copenhagen') = 23
-				AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') > $2
-			ORDER BY DATE(timestamp AT TIME ZONE 'Europe/Copenhagen'), timestamp
-		)
-		SELECT COALESCE(SUM(yield_sum), 0) FROM daily_yields
-	`, scaleUUID, since.Format("2006-01-02")).Scan(&total)
+		SELECT SUM(yield) FROM wolf_hourly
+		WHERE scale_id = $1 AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') > $2
+	`, scaleUUID, sinceStr).Scan(&hourlyTotal)
 	if err != nil {
 		return 0, err
 	}
-	return total.Float64, nil
+
+	// Get measurement-based yields for dates NOT covered by hourly data
+	var measurementTotal sql.NullFloat64
+	err = t.db.QueryRowContext(ctx, `
+		SELECT SUM(yield) FROM wolf_measurement
+		WHERE scale_id = $1 AND date > $2
+			AND date NOT IN (
+				SELECT DISTINCT DATE(timestamp AT TIME ZONE 'Europe/Copenhagen')
+				FROM wolf_hourly WHERE scale_id = $1
+			)
+	`, scaleUUID, sinceStr).Scan(&measurementTotal)
+	if err != nil {
+		return 0, err
+	}
+
+	result := 0.0
+	if hourlyTotal.Valid {
+		result += hourlyTotal.Float64
+	}
+	if measurementTotal.Valid {
+		result += measurementTotal.Float64
+	}
+	return result, nil
 }
 
 // getWeightAt returns the weight at 23:00 for the given date
@@ -397,6 +420,44 @@ func (t *HourlySyncTask) getLastInspection(ctx context.Context, scaleUUID string
 	return formatDanishDate(lastDate.Time)
 }
 
+// getSeasonTotal returns the total yield since April 1 of the given year.
+// It combines data from wolf_hourly and wolf_measurement to cover the full season.
+func (t *HourlySyncTask) getSeasonTotal(ctx context.Context, scaleUUID string, year int, loc *time.Location) (float64, error) {
+	seasonStart := time.Date(year, 4, 1, 0, 0, 0, 0, loc)
+	sinceStr := seasonStart.Format("2006-01-02")
+
+	var hourlyTotal sql.NullFloat64
+	err := t.db.QueryRowContext(ctx, `
+		SELECT SUM(yield) FROM wolf_hourly
+		WHERE scale_id = $1 AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') > $2
+	`, scaleUUID, sinceStr).Scan(&hourlyTotal)
+	if err != nil {
+		return 0, err
+	}
+
+	var measurementTotal sql.NullFloat64
+	err = t.db.QueryRowContext(ctx, `
+		SELECT SUM(yield) FROM wolf_measurement
+		WHERE scale_id = $1 AND date > $2
+			AND date NOT IN (
+				SELECT DISTINCT DATE(timestamp AT TIME ZONE 'Europe/Copenhagen')
+				FROM wolf_hourly WHERE scale_id = $1
+			)
+	`, scaleUUID, sinceStr).Scan(&measurementTotal)
+	if err != nil {
+		return 0, err
+	}
+
+	result := 0.0
+	if hourlyTotal.Valid {
+		result += hourlyTotal.Float64
+	}
+	if measurementTotal.Valid {
+		result += measurementTotal.Float64
+	}
+	return result, nil
+}
+
 // buildDailyMessage creates the daily one-liner notification
 func (t *HourlySyncTask) buildDailyMessage(ctx context.Context, scaleUUID string, date time.Time, loc *time.Location) (string, error) {
 	dailyYield, err := t.getDailyYield(ctx, scaleUUID, date, loc)
@@ -419,20 +480,13 @@ func (t *HourlySyncTask) buildDailyMessage(ctx context.Context, scaleUUID string
 
 // buildWeeklyMessage creates the weekly summary notification
 func (t *HourlySyncTask) buildWeeklyMessage(ctx context.Context, scaleUUID string, weekStart, weekEnd time.Time, loc *time.Location) (string, error) {
-	// Sum daily yields for each day of the week
+	// Sum hourly yields for each day of the week
 	var weeklyYield sql.NullFloat64
 	err := t.db.QueryRowContext(ctx, `
-		WITH daily_yields AS (
-			SELECT DISTINCT ON (DATE(timestamp AT TIME ZONE 'Europe/Copenhagen'))
-				yield_sum
-			FROM wolf_hourly
-			WHERE scale_id = $1
-				AND EXTRACT(HOUR FROM timestamp AT TIME ZONE 'Europe/Copenhagen') = 23
-				AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') >= $2
-				AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') <= $3
-			ORDER BY DATE(timestamp AT TIME ZONE 'Europe/Copenhagen'), timestamp
-		)
-		SELECT COALESCE(SUM(yield_sum), 0) FROM daily_yields
+		SELECT SUM(yield) FROM wolf_hourly
+		WHERE scale_id = $1
+			AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') >= $2
+			AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') <= $3
 	`, scaleUUID, weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02")).Scan(&weeklyYield)
 	if err != nil {
 		return "", fmt.Errorf("failed to get weekly yield: %w", err)
@@ -443,22 +497,8 @@ func (t *HourlySyncTask) buildWeeklyMessage(ctx context.Context, scaleUUID strin
 		return "", fmt.Errorf("failed to get since-harvest: %w", err)
 	}
 
-	// Season total
-	seasonStart := time.Date(weekEnd.Year(), 4, 1, 0, 0, 0, 0, loc)
-	var seasonTotal sql.NullFloat64
-	err = t.db.QueryRowContext(ctx, `
-		WITH daily_yields AS (
-			SELECT DISTINCT ON (DATE(timestamp AT TIME ZONE 'Europe/Copenhagen'))
-				yield_sum
-			FROM wolf_hourly
-			WHERE scale_id = $1
-				AND EXTRACT(HOUR FROM timestamp AT TIME ZONE 'Europe/Copenhagen') = 23
-				AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') >= $2
-				AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') <= $3
-			ORDER BY DATE(timestamp AT TIME ZONE 'Europe/Copenhagen'), timestamp
-		)
-		SELECT COALESCE(SUM(yield_sum), 0) FROM daily_yields
-	`, scaleUUID, seasonStart.Format("2006-01-02"), weekEnd.Format("2006-01-02")).Scan(&seasonTotal)
+	// Season total (same as since-harvest when no harvest has been recorded)
+	seasonTotal, err := t.getSeasonTotal(ctx, scaleUUID, weekEnd.Year(), loc)
 	if err != nil {
 		return "", fmt.Errorf("failed to get season total: %w", err)
 	}
@@ -470,9 +510,13 @@ func (t *HourlySyncTask) buildWeeklyMessage(ctx context.Context, scaleUUID strin
 
 	inspectionStr := t.getLastInspection(ctx, scaleUUID)
 
-	yieldStr := formatYield(weeklyYield.Float64)
+	var weeklyYieldVal float64
+	if weeklyYield.Valid {
+		weeklyYieldVal = weeklyYield.Float64
+	}
+	yieldStr := formatYield(weeklyYieldVal)
 	sinceStr := formatKg(sinceHarvest)
-	totalStr := formatKg(seasonTotal.Float64)
+	totalStr := formatKg(seasonTotal)
 	weightStr := formatKg(weight)
 
 	return fmt.Sprintf(`%s %s: 🍯 **%s kg** // %s kg

@@ -123,8 +123,8 @@ GET https://app.wolf-waagen.de/graph/stock/{scaleId}?interval=day&start={epoch_m
 
 ### Important details
 - `interval=day` returns pre-aggregated daily values (weight = 00:00 reading, yield = corrected daily change)
-- `interval=hour` returns hourly readings with weight, yield, yield_sum (cumulative daily), temperature
-- The daily endpoint's pre-aggregated yield may change throughout the day as more hourly data arrives. We use `interval=hour` and take the `yield_sum` at 23:00 as the definitive daily yield.
+- `interval=hour` returns hourly readings with weight, yield, yield_sum, temperature. **Note:** `yield` is the hourly change; `yield_sum` is cumulative relative to the fetch window start (NOT a daily reset). Daily yield must be calculated as `SUM(yield)` across all hours of the day.
+- The daily endpoint's pre-aggregated yield may change throughout the day as more hourly data arrives. We use `interval=hour` and calculate the daily yield as `SUM(yield)` across all hourly entries for the day.
 - `values` field can be: `null`, numbers, strings, arrays of numbers, or objects — handled with `json.RawMessage`
 - Timestamps are epoch milliseconds. Use Copenhagen timezone (CEST/CET) for midnight boundaries.
 - The scale transmits data every ~6 hours. The 23:00 reading for a day may not arrive until late morning or afternoon the next day — timing varies.
