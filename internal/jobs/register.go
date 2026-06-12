@@ -33,18 +33,35 @@ func RegisterAll(reg *job.Registry, db *sql.DB, cfg *config.Config, log *logger.
 		return err
 	}
 
-	// Wolf Backfill — fetch historical data (no schedule, manual only)
+	// Wolf Backfill — fetch historical daily data (no schedule, manual only)
 	// Fetches year by year from 2016 (scale's first year) to today
 	if err := reg.Register(&job.Definition{
 		Kind:        "wolf_backfill",
 		Name:        "Wolf Backfill",
-		Description: "Fetch and store all historical measurements (2016-present)",
+		Description: "Fetch and store all historical daily measurements (2016-present)",
 		Service:     "wolf",
 		Tasks: []job.Task{
 			tasks.NewBackfillTask(wolfClient, db, scales, 2016, log),
 		},
 		Schedules:      []string{}, // no automatic schedule
 		TimeoutMinutes: cfg.Jobs.Global.TimeoutMinutes,
+		MaxAttempts:    cfg.Jobs.Global.MaxAttempts,
+	}); err != nil {
+		return err
+	}
+
+	// Wolf Hourly Backfill — fetch historical hourly data (no schedule, manual only)
+	// Fetches month by month from 2023 (Valby scale start) to today
+	if err := reg.Register(&job.Definition{
+		Kind:        "wolf_hourly_backfill",
+		Name:        "Wolf Hourly Backfill",
+		Description: "Fetch and store all historical hourly measurements (2023-present)",
+		Service:     "wolf",
+		Tasks: []job.Task{
+			tasks.NewHourlyBackfillTask(wolfClient, db, scales, 2023, log),
+		},
+		Schedules:      []string{}, // no automatic schedule
+		TimeoutMinutes: 30,         // longer timeout for bulk fetch
 		MaxAttempts:    cfg.Jobs.Global.MaxAttempts,
 	}); err != nil {
 		return err
