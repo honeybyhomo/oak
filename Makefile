@@ -20,7 +20,7 @@ run-dev:
 build:
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(APP_NAME) $(MAIN_PATH)
+	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./cmd/main.go
 	@echo "Binary created at $(BUILD_DIR)/$(APP_NAME)"
 
 ## test: Run all tests
@@ -36,6 +36,10 @@ clean:
 ## fmt: Format Go code
 fmt:
 	$(GO) fmt ./...
+
+## notify: Send notification for most recent complete day (daily|weekly|both, --dry-run)
+notify:
+	$(GO) run ./cmd/notify $(ARGS)
 
 ## deps: Download dependencies
 deps:
