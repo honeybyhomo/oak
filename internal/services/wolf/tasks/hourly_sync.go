@@ -376,29 +376,28 @@ func (t *HourlySyncTask) buildDailyMessage(ctx context.Context, scaleUUID string
 
 // buildWeeklyMessage creates the weekly summary notification
 func (t *HourlySyncTask) buildWeeklyMessage(ctx context.Context, scaleUUID string, weekStart, weekEnd time.Time, loc *time.Location) (string, error) {
-	// Sum hourly yields for each day of the week
+	// Prefer measurement (corrected) yields for the week
 	var weeklyYield sql.NullFloat64
 	err := t.db.QueryRowContext(ctx, `
-		SELECT SUM(yield) FROM wolf_hourly
-		WHERE scale_id = $1
-			AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') >= $2
-			AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') <= $3
+		SELECT SUM(yield) FROM wolf_measurement
+		WHERE scale_id = $1 AND date >= $2 AND date <= $3
 	`, scaleUUID, weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02")).Scan(&weeklyYield)
 	if err != nil {
 		return "", fmt.Errorf("failed to get weekly yield: %w", err)
 	}
 
+	// Season total since April 1
+	seasonTotal, err := t.getSeasonTotal(ctx, scaleUUID, weekEnd.Year(), loc)
+	if err != nil {
+		return "", fmt.Errorf("failed to get season total: %w", err)
+	}
+
+	// Total since last harvest
 	sinceHarvest, err := t.getSinceHarvest(ctx, scaleUUID, weekEnd.Year(), loc)
 	if err != nil {
 		return "", fmt.Errorf("failed to get since-harvest: %w", err)
 	}
 	_ = sinceHarvest
-
-	// Season total (same as since-harvest when no harvest has been recorded)
-	seasonTotal, err := t.getSeasonTotal(ctx, scaleUUID, weekEnd.Year(), loc)
-	if err != nil {
-		return "", fmt.Errorf("failed to get season total: %w", err)
-	}
 
 	weight, err := t.getWeightAt(ctx, scaleUUID, weekEnd, loc)
 	if err != nil {
@@ -412,17 +411,19 @@ func (t *HourlySyncTask) buildWeeklyMessage(ctx context.Context, scaleUUID strin
 		weeklyYieldVal = weeklyYield.Float64
 	}
 	yieldStr := formatYield(weeklyYieldVal)
-	totalStr := formatKg(seasonTotal)
+	seasonStr := formatKg(seasonTotal)
+	sinceStr := formatKg(sinceHarvest)
 	weightStr := formatKg(weight)
 
 	weekNum := formatISOWeek(weekEnd)
 
 	return fmt.Sprintf(`Uge %s: 🍯 **%s kg**
 
+**🍯 Total:** %s kg
 **🍯 Total siden sidste høst:** %s kg
 **⚖️ Vægt:** %s kg
 **🔍 Sidste inspektion:** %s`,
-		weekNum, yieldStr, totalStr, weightStr, inspectionStr), nil
+		weekNum, yieldStr, seasonStr, sinceStr, weightStr, inspectionStr), nil
 }
 
 func (t *HourlySyncTask) sendToMattermost(ctx context.Context, message string) error {
