@@ -67,6 +67,11 @@ func (t *HourlySyncTask) Run(ctx context.Context) (*job.Result, error) {
 		}
 		totalRecords += records
 
+		// Sync corrected daily yields from the daily API endpoint
+		if err := t.syncDailyMeasurements(ctx, scaleID, loc); err != nil {
+			t.logger.Error("Failed to sync daily measurements", "scale", scaleID, "error", err)
+		}
+
 		// Try to send notifications
 		notifCount, err := t.trySendNotifications(ctx, scaleID, now, loc)
 		if err != nil {
@@ -323,139 +328,30 @@ func (t *HourlySyncTask) getScaleUUID(ctx context.Context, scaleID string) (stri
 // The API's yield_sum field is cumulative (relative to the fetch window) and cannot be
 // used as a daily yield value.
 func (t *HourlySyncTask) getDailyYield(ctx context.Context, scaleUUID string, date time.Time, loc *time.Location) (float64, error) {
-	var total sql.NullFloat64
-	err := t.db.QueryRowContext(ctx, `
-		SELECT SUM(yield) FROM wolf_hourly
-		WHERE scale_id = $1 AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') = $2
-	`, scaleUUID, date.Format("2006-01-02")).Scan(&total)
-	if err != nil {
-		return 0, fmt.Errorf("no hourly data for %s: %w", date.Format("2006-01-02"), err)
-	}
-	if !total.Valid {
-		return 0, fmt.Errorf("no hourly data for %s", date.Format("2006-01-02"))
-	}
-	return total.Float64, nil
+	return getDailyYieldQuery(ctx, t.db, scaleUUID, date)
 }
 
 // getSinceHarvest returns the total yield since the last harvest (or April 1).
-// It combines data from wolf_hourly (for dates with hourly data) and wolf_measurement
-// (for historical dates with daily data only), using SUM(yield) from hourly data
-// where available since the API's yield_sum is cumulative relative to the fetch window.
+// Prefers wolf_measurement (corrected daily yields from the daily API) and only
+// falls back to SUM(hourly yield) for dates not yet in the measurement table.
 func (t *HourlySyncTask) getSinceHarvest(ctx context.Context, scaleUUID string, year int, loc *time.Location) (float64, error) {
-	// Check for last harvest
-	var lastHarvest sql.NullTime
-	_ = t.db.QueryRowContext(ctx, `
-		SELECT MAX(date) FROM wolf_harvest WHERE scale_id = $1
-	`, scaleUUID).Scan(&lastHarvest)
-
-	var since time.Time
-	if lastHarvest.Valid {
-		since = lastHarvest.Time
-	} else {
-		since = time.Date(year, 4, 1, 0, 0, 0, 0, loc)
-	}
-
-	sinceStr := since.Format("2006-01-02")
-
-	// Get hourly-based yields
-	var hourlyTotal sql.NullFloat64
-	err := t.db.QueryRowContext(ctx, `
-		SELECT SUM(yield) FROM wolf_hourly
-		WHERE scale_id = $1 AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') > $2
-	`, scaleUUID, sinceStr).Scan(&hourlyTotal)
-	if err != nil {
-		return 0, err
-	}
-
-	// Get measurement-based yields for dates NOT covered by hourly data
-	var measurementTotal sql.NullFloat64
-	err = t.db.QueryRowContext(ctx, `
-		SELECT SUM(yield) FROM wolf_measurement
-		WHERE scale_id = $1 AND date > $2
-			AND date NOT IN (
-				SELECT DISTINCT DATE(timestamp AT TIME ZONE 'Europe/Copenhagen')
-				FROM wolf_hourly WHERE scale_id = $1
-			)
-	`, scaleUUID, sinceStr).Scan(&measurementTotal)
-	if err != nil {
-		return 0, err
-	}
-
-	result := 0.0
-	if hourlyTotal.Valid {
-		result += hourlyTotal.Float64
-	}
-	if measurementTotal.Valid {
-		result += measurementTotal.Float64
-	}
-	return result, nil
+	return getSinceHarvestQuery(ctx, t.db, scaleUUID, year, loc)
 }
 
 // getWeightAt returns the weight at 23:00 for the given date
 func (t *HourlySyncTask) getWeightAt(ctx context.Context, scaleUUID string, date time.Time, loc *time.Location) (float64, error) {
-	hour23 := time.Date(date.Year(), date.Month(), date.Day(), 23, 0, 0, 0, loc)
-	var weight sql.NullFloat64
-	err := t.db.QueryRowContext(ctx, `
-		SELECT weight FROM wolf_hourly
-		WHERE scale_id = $1 AND timestamp = $2
-	`, scaleUUID, hour23.UTC()).Scan(&weight)
-	if err != nil {
-		return 0, fmt.Errorf("no weight for %s: %w", date.Format("2006-01-02"), err)
-	}
-	return weight.Float64, nil
+	return getWeightAtQuery(ctx, t.db, scaleUUID, date, loc)
 }
 
 // getLastInspection returns the date of the last checkup, formatted in Danish
 func (t *HourlySyncTask) getLastInspection(ctx context.Context, scaleUUID string) string {
-	var lastDate sql.NullTime
-	err := t.db.QueryRowContext(ctx, `
-		SELECT date FROM wolf_checkup
-		WHERE scale_id = $1
-		ORDER BY date DESC
-		LIMIT 1
-	`, scaleUUID).Scan(&lastDate)
-	if err != nil || !lastDate.Valid {
-		return "Ingen"
-	}
-	return formatDanishDate(lastDate.Time)
+	return getLastInspectionQuery(ctx, t.db, scaleUUID)
 }
 
 // getSeasonTotal returns the total yield since April 1 of the given year.
-// It combines data from wolf_hourly and wolf_measurement to cover the full season.
+// Same logic as getSinceHarvest but always uses April 1 as the start date.
 func (t *HourlySyncTask) getSeasonTotal(ctx context.Context, scaleUUID string, year int, loc *time.Location) (float64, error) {
-	seasonStart := time.Date(year, 4, 1, 0, 0, 0, 0, loc)
-	sinceStr := seasonStart.Format("2006-01-02")
-
-	var hourlyTotal sql.NullFloat64
-	err := t.db.QueryRowContext(ctx, `
-		SELECT SUM(yield) FROM wolf_hourly
-		WHERE scale_id = $1 AND DATE(timestamp AT TIME ZONE 'Europe/Copenhagen') > $2
-	`, scaleUUID, sinceStr).Scan(&hourlyTotal)
-	if err != nil {
-		return 0, err
-	}
-
-	var measurementTotal sql.NullFloat64
-	err = t.db.QueryRowContext(ctx, `
-		SELECT SUM(yield) FROM wolf_measurement
-		WHERE scale_id = $1 AND date > $2
-			AND date NOT IN (
-				SELECT DISTINCT DATE(timestamp AT TIME ZONE 'Europe/Copenhagen')
-				FROM wolf_hourly WHERE scale_id = $1
-			)
-	`, scaleUUID, sinceStr).Scan(&measurementTotal)
-	if err != nil {
-		return 0, err
-	}
-
-	result := 0.0
-	if hourlyTotal.Valid {
-		result += hourlyTotal.Float64
-	}
-	if measurementTotal.Valid {
-		result += measurementTotal.Float64
-	}
-	return result, nil
+	return getSeasonTotalQuery(ctx, t.db, scaleUUID, year, loc)
 }
 
 // buildDailyMessage creates the daily one-liner notification
@@ -496,6 +392,7 @@ func (t *HourlySyncTask) buildWeeklyMessage(ctx context.Context, scaleUUID strin
 	if err != nil {
 		return "", fmt.Errorf("failed to get since-harvest: %w", err)
 	}
+	_ = sinceHarvest
 
 	// Season total (same as since-harvest when no harvest has been recorded)
 	seasonTotal, err := t.getSeasonTotal(ctx, scaleUUID, weekEnd.Year(), loc)
@@ -515,17 +412,17 @@ func (t *HourlySyncTask) buildWeeklyMessage(ctx context.Context, scaleUUID strin
 		weeklyYieldVal = weeklyYield.Float64
 	}
 	yieldStr := formatYield(weeklyYieldVal)
-	sinceStr := formatKg(sinceHarvest)
 	totalStr := formatKg(seasonTotal)
 	weightStr := formatKg(weight)
 
-	return fmt.Sprintf(`%s %s: 🍯 **%s kg** // %s kg
+	weekNum := formatISOWeek(weekEnd)
 
-**🍯 Total:** %s kg
+	return fmt.Sprintf(`Uge %s: 🍯 **%s kg**
+
+**🍯 Total siden sidste høst:** %s kg
 **⚖️ Vægt:** %s kg
 **🔍 Sidste inspektion:** %s`,
-		danishWeekdays[weekEnd.Weekday()], fmt.Sprintf("%d/%d", weekEnd.Day(), weekEnd.Month()),
-		yieldStr, sinceStr, totalStr, weightStr, inspectionStr), nil
+		weekNum, yieldStr, totalStr, weightStr, inspectionStr), nil
 }
 
 func (t *HourlySyncTask) sendToMattermost(ctx context.Context, message string) error {
@@ -556,5 +453,62 @@ func (t *HourlySyncTask) sendToMattermost(ctx context.Context, message string) e
 	}
 
 	t.logger.Info("Sent Mattermost notification")
+	return nil
+}
+
+// syncDailyMeasurements fetches daily (corrected) yields from the API for recent
+// completed days and upserts into wolf_measurement. The measurement table stores
+// the daily endpoint's corrected yield values which are more accurate than
+// SUM(hourly yield) for season total calculations.
+func (t *HourlySyncTask) syncDailyMeasurements(ctx context.Context, scaleID string, loc *time.Location) error {
+	// Sync the last 3 days to ensure corrected yields are up to date
+	end := time.Now().In(loc)
+	start := end.AddDate(0, 0, -3)
+
+	resp, err := t.client.FetchDailyData(ctx, scaleID, start, end)
+	if err != nil {
+		return fmt.Errorf("failed to fetch daily data: %w", err)
+	}
+
+	var scaleUUID string
+	err = t.db.QueryRowContext(ctx, `SELECT id FROM wolf_scale WHERE scale_id = $1`, scaleID).Scan(&scaleUUID)
+	if err != nil {
+		return fmt.Errorf("scale %s not found: %w", scaleID, err)
+	}
+
+	weightSeries := wolf.FindSeries(resp, "weight")
+	yieldSeries := wolf.FindSeries(resp, "yield")
+
+	if weightSeries == nil {
+		return nil
+	}
+
+	weights := weightSeries.FloatValues()
+	yields := yieldSeries.FloatValues()
+	pointStart := time.UnixMilli(resp.PointStart).In(loc)
+	inserted := 0
+
+	for i := 0; i < len(weights); i++ {
+		date := pointStart.AddDate(0, 0, i)
+		if i < len(yields) && !math.IsNaN(yields[i]) {
+			_, err := t.db.ExecContext(ctx, `
+				INSERT INTO wolf_measurement (scale_id, date, weight, yield)
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (scale_id, date) DO UPDATE SET
+					yield = EXCLUDED.yield,
+					weight = EXCLUDED.weight,
+					updated_at = NOW()
+			`, scaleUUID, date.Format("2006-01-02"), weights[i], yields[i])
+			if err != nil {
+				t.logger.Warn("Failed to sync daily measurement", "date", date.Format("2006-01-02"), "error", err)
+			} else {
+				inserted++
+			}
+		}
+	}
+
+	if inserted > 0 {
+		t.logger.Info("Synced daily measurements", "scale", scaleID, "records", inserted)
+	}
 	return nil
 }
